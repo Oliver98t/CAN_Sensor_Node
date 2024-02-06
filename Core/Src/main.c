@@ -1,0 +1,508 @@
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file           : main.c
+  * @brief          : Main program body
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2023 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
+#include "string.h"
+#include "stdlib.h"
+#include "stdio.h"
+#include "bmp180_for_stm32_hal.h"
+/* USER CODE END Includes */
+
+/* Private typedef -----------------------------------------------------------*/
+/* USER CODE BEGIN PTD */
+
+/* USER CODE END PTD */
+
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+
+// CAN constants
+#define SERVER_CAN_ID 				0x01
+#define SENSOR_NODE_CAN_ID   		0x30
+#define CAN_DATA_LEN    			8
+#define START_MESSAGE_LEN 			1
+#define STOP_MESSAGE_LEN 			1
+// data states
+#define SENSOR_NODE_RECEIVE_STATE	0
+#define SENSOR_NODE_TRANSMIT_STATE	1
+/* USER CODE END PD */
+
+/* Private macro -------------------------------------------------------------*/
+/* USER CODE BEGIN PM */
+
+/* USER CODE END PM */
+
+/* Private variables ---------------------------------------------------------*/
+CAN_HandleTypeDef 			hcan;
+I2C_HandleTypeDef 			hi2c1;
+CAN_RxHeaderTypeDef   		rx_header;
+uint8_t               		rx_data[8];
+volatile uint8_t 			sensor_node_state = SENSOR_NODE_RECEIVE_STATE;
+
+/* USER CODE BEGIN PV */
+
+/* USER CODE END PV */
+
+/* Private function prototypes -----------------------------------------------*/
+void SystemClock_Config(void);
+static void MX_GPIO_Init(void);
+static void MX_CAN_Init(void);
+static void MX_I2C1_Init(void);
+/* USER CODE BEGIN PFP */
+
+// functions for sending CAN packets/buffer
+// --------------------------------------------------------------------------------------------------------
+
+// send packet of size data_len over CAN
+static void CAN_send_packet(	CAN_HandleTypeDef* hcan,
+								CAN_TxHeaderTypeDef* TxHeader,
+								uint8_t* TxData,
+								uint8_t data_len	);
+
+// send start condition over CAN
+static void CAN_send_start(CAN_HandleTypeDef* hcan, CAN_TxHeaderTypeDef* TxHeader);
+
+// send stop condition over CAN
+static void CAN_send_stop(CAN_HandleTypeDef* hcan, CAN_TxHeaderTypeDef* TxHeader);
+
+// send buffer of size buffer_len over CAN
+static void CAN_send_buffer(	CAN_HandleTypeDef* hcan,
+								CAN_TxHeaderTypeDef* TxHeader,
+								uint8_t* buffer,
+								uint8_t buffer_len	);
+// --------------------------------------------------------------------------------------------------------
+
+typedef struct
+{
+    double Ax;
+    double Ay;
+    double Az;
+} mpu6050_data;
+
+/* USER CODE END PFP */
+
+/* Private user code ---------------------------------------------------------*/
+/* USER CODE BEGIN 0 */
+
+/* USER CODE END 0 */
+
+/**
+  * @brief  The application entry point.
+  * @retval int
+  */
+int main(void)
+{
+  /* USER CODE BEGIN 1 */
+
+  /* USER CODE END 1 */
+
+  /* MCU Configuration--------------------------------------------------------*/
+
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+  HAL_Init();
+
+  /* USER CODE BEGIN Init */
+
+  /* USER CODE END Init */
+
+  /* Configure the system clock */
+  SystemClock_Config();
+
+  /* USER CODE BEGIN SysInit */
+
+  /* USER CODE END SysInit */
+
+  /* Initialize all configured peripherals */
+  MX_GPIO_Init();
+  MX_CAN_Init();
+  MX_I2C1_Init();
+
+  /* USER CODE BEGIN 2 */
+  // sensors
+  //############################################################################################################
+
+  /* Initializes BMP180 sensor and oversampling settings. */
+
+  BMP180_Init(&hi2c1);
+  BMP180_SetOversampling(BMP180_ULTRA);
+  BMP180_UpdateCalibrationData();
+
+
+  //############################################################################################################
+
+  // Start the CAN peripheral
+  //############################################################################################################
+  HAL_CAN_Start(&hcan);
+  if (HAL_CAN_ActivateNotification(&hcan, CAN_IT_RX_FIFO0_MSG_PENDING) != HAL_OK)
+  {
+	  Error_Handler();
+  }
+  CAN_TxHeaderTypeDef TxHeader;
+  TxHeader.IDE = CAN_ID_STD;
+  TxHeader.StdId = SENSOR_NODE_CAN_ID;
+  TxHeader.ExtId = 0;
+  TxHeader.RTR = CAN_RTR_DATA;
+  TxHeader.DLC = 8;
+  TxHeader.TransmitGlobalTime = DISABLE;
+  //############################################################################################################
+
+  // set up test data
+  // ############################################################################################################
+  mpu6050_data mpu6050_test;
+  mpu6050_test.Ax = 32.5;
+  mpu6050_test.Ay = 506.8;
+  mpu6050_test.Az = 1002.76;
+  size_t mpu6050_test_len = sizeof(mpu6050_test);
+
+  bmp180_data bmp180_test;
+  bmp180_test.pressure = 5001;
+  bmp180_test.temperature = 42;
+  size_t bmp180_test_len = sizeof(bmp180_test);
+
+  size_t test_data_buffer_len = mpu6050_test_len + bmp180_test_len;
+  uint8_t test_data_buffer[test_data_buffer_len];
+  // ############################################################################################################
+
+
+
+  /* USER CODE END 2 */
+
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
+  while (1)
+  {
+    /* USER CODE END WHILE */
+
+    /* USER CODE BEGIN 3 */
+
+	  // gather i2c sensor data and package for CAN
+	  //############################################################################################################
+	  // read sensor values
+
+	  // package sensor values into data buffer
+	  memcpy(test_data_buffer, &bmp180_test, bmp180_test_len);
+	  memcpy(test_data_buffer+bmp180_test_len, &mpu6050_test, mpu6050_test_len);
+	  //############################################################################################################
+
+	  // check sensor node state
+	  if( sensor_node_state == SENSOR_NODE_TRANSMIT_STATE )
+	  {
+		  // send buffer over CAN
+		  CAN_send_buffer(&hcan, &TxHeader, test_data_buffer, test_data_buffer_len);
+		  HAL_Delay(100);
+	  }
+  }
+  /* USER CODE END 3 */
+}
+
+/**
+  * @brief System Clock Configuration
+  * @retval None
+  */
+void SystemClock_Config(void)
+{
+  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+  RCC_PeriphCLKInitTypeDef PeriphClkInit = {0};
+
+  /** Initializes the RCC Oscillators according to the specified parameters
+  * in the RCC_OscInitTypeDef structure.
+  */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI|RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL12;
+  RCC_OscInitStruct.PLL.PREDIV = RCC_PREDIV_DIV2;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Initializes the CPU, AHB and APB buses clocks
+  */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
+
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_I2C1;
+  PeriphClkInit.I2c1ClockSelection = RCC_I2C1CLKSOURCE_HSI;
+  if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+/**
+  * @brief CAN Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_CAN_Init(void)
+{
+
+  /* USER CODE BEGIN CAN_Init 0 */
+
+  /* USER CODE END CAN_Init 0 */
+
+  /* USER CODE BEGIN CAN_Init 1 */
+
+  /* USER CODE END CAN_Init 1 */
+  hcan.Instance = CAN;
+  hcan.Init.Prescaler = 150;
+  hcan.Init.Mode = CAN_MODE_NORMAL;
+  hcan.Init.SyncJumpWidth = CAN_SJW_1TQ;
+  hcan.Init.TimeSeg1 = CAN_BS1_13TQ;
+  hcan.Init.TimeSeg2 = CAN_BS2_2TQ;
+  hcan.Init.TimeTriggeredMode = DISABLE;
+  hcan.Init.AutoBusOff = DISABLE;
+  hcan.Init.AutoWakeUp = DISABLE;
+  hcan.Init.AutoRetransmission = DISABLE;
+  hcan.Init.ReceiveFifoLocked = DISABLE;
+  hcan.Init.TransmitFifoPriority = DISABLE;
+  if (HAL_CAN_Init(&hcan) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN CAN_Init 2 */
+  // configure CAN filter to only accept commands from the sensor server
+  CAN_FilterTypeDef canfilterconfig;
+  canfilterconfig.FilterBank = (uint32_t)10;  // which filter bank to use from the assigned ones
+  canfilterconfig.FilterFIFOAssignment = CAN_FILTER_FIFO0;
+  canfilterconfig.FilterIdHigh = SERVER_CAN_ID<<5;
+  canfilterconfig.FilterIdLow = SERVER_CAN_ID<<5;
+  canfilterconfig.FilterMaskIdHigh = SERVER_CAN_ID<<5;
+  canfilterconfig.FilterMaskIdLow = SERVER_CAN_ID<<5;
+  canfilterconfig.FilterMode = CAN_FILTERMODE_IDLIST;
+  canfilterconfig.FilterScale = CAN_FILTERSCALE_16BIT;
+  canfilterconfig.FilterActivation = CAN_FILTER_ENABLE;
+  HAL_CAN_ConfigFilter(&hcan, &canfilterconfig);
+  /* USER CODE END CAN_Init 2 */
+
+}
+
+/**
+  * @brief I2C1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_I2C1_Init(void)
+{
+
+  /* USER CODE BEGIN I2C1_Init 0 */
+
+  /* USER CODE END I2C1_Init 0 */
+
+  /* USER CODE BEGIN I2C1_Init 1 */
+
+  /* USER CODE END I2C1_Init 1 */
+  hi2c1.Instance = I2C1;
+  hi2c1.Init.Timing = 0x2000090E;
+  hi2c1.Init.OwnAddress1 = 0;
+  hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+  hi2c1.Init.OwnAddress2 = 0;
+  hi2c1.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
+  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+  hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure Analogue filter
+  */
+  if (HAL_I2CEx_ConfigAnalogFilter(&hi2c1, I2C_ANALOGFILTER_ENABLE) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure Digital filter
+  */
+  if (HAL_I2CEx_ConfigDigitalFilter(&hi2c1, 0) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN I2C1_Init 2 */
+
+  /* USER CODE END I2C1_Init 2 */
+
+}
+
+/**
+  * @brief GPIO Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_GPIO_Init(void)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+/* USER CODE BEGIN MX_GPIO_Init_1 */
+/* USER CODE END MX_GPIO_Init_1 */
+
+  /* GPIO Ports Clock Enable */
+  __HAL_RCC_GPIOF_CLK_ENABLE();
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin : LD2_Pin */
+  GPIO_InitStruct.Pin = LD2_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(LD2_GPIO_Port, &GPIO_InitStruct);
+
+/* USER CODE BEGIN MX_GPIO_Init_2 */
+/* USER CODE END MX_GPIO_Init_2 */
+}
+
+/* USER CODE BEGIN 4 */
+
+// function definitions
+//-------------------------------------------------------------------------------------------------------------------------
+
+static void CAN_send_packet(	CAN_HandleTypeDef* hcan,
+								CAN_TxHeaderTypeDef* TxHeader,
+								uint8_t* TxData,
+								uint8_t data_len	)
+{
+	uint32_t TxMailbox;
+
+	HAL_StatusTypeDef CAN_status;
+
+	TxHeader->DLC = data_len;
+
+	CAN_status = HAL_CAN_AddTxMessage(hcan, TxHeader, TxData, &TxMailbox);
+
+	// IMPORTANT - must wait for CAN bytes to be sent before sending next section of bytes
+	while(HAL_CAN_IsTxMessagePending(hcan, TxMailbox));
+
+	if (CAN_status != HAL_OK)
+	{
+	HAL_CAN_GetError(hcan);
+	Error_Handler();
+	}
+}
+
+static void CAN_send_start(CAN_HandleTypeDef* hcan, CAN_TxHeaderTypeDef* TxHeader)
+{
+	uint8_t TxData = 0xff;
+	CAN_send_packet(hcan, TxHeader, &TxData, START_MESSAGE_LEN);
+}
+
+static void CAN_send_stop(CAN_HandleTypeDef* hcan, CAN_TxHeaderTypeDef* TxHeader)
+{
+	uint8_t TxData = 0xaa;
+	CAN_send_packet(hcan, TxHeader, &TxData, STOP_MESSAGE_LEN);
+}
+
+static void CAN_send_buffer(	CAN_HandleTypeDef* hcan,
+								CAN_TxHeaderTypeDef* TxHeader,
+								uint8_t* buffer,
+								uint8_t buffer_len)
+{
+	// iterate through bytes of data and send over CAN
+	CAN_send_start(hcan, TxHeader);
+	//############################################################################################################
+	TxHeader->DLC = 8;
+	for(int mem_offset = 0; mem_offset < buffer_len; mem_offset += CAN_DATA_LEN)
+	{
+	  CAN_send_packet(hcan, TxHeader, buffer+mem_offset, CAN_DATA_LEN);
+	}
+
+	CAN_send_stop(hcan, TxHeader);
+}
+
+//-------------------------------------------------------------------------------------------------------------------------
+
+
+
+void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
+{
+  if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &rx_header, rx_data) == HAL_OK)
+  {
+	  if( rx_header.StdId == SERVER_CAN_ID) // check for messages from central server
+	  {
+		  if( rx_data[0] == SENSOR_NODE_CAN_ID )
+		  {
+			  //HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
+			  sensor_node_state = SENSOR_NODE_TRANSMIT_STATE;
+		  }
+		  else
+		  {
+			  sensor_node_state = SENSOR_NODE_RECEIVE_STATE;
+		  }
+
+	  }
+  }
+}
+
+void HAL_CAN_ErrorCallback(CAN_HandleTypeDef *hcan)
+{
+
+}
+
+/* USER CODE END 4 */
+
+/**
+  * @brief  This function is executed in case of error occurrence.
+  * @retval None
+  */
+void Error_Handler(void)
+{
+  /* USER CODE BEGIN Error_Handler_Debug */
+  /* User can add his own implementation to report the HAL error return state */
+  __disable_irq();
+  //HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_SET);
+  while (1)
+  {
+  }
+  /* USER CODE END Error_Handler_Debug */
+}
+
+#ifdef  USE_FULL_ASSERT
+/**
+  * @brief  Reports the name of the source file and the source line number
+  *         where the assert_param error has occurred.
+  * @param  file: pointer to the source file name
+  * @param  line: assert_param error line source number
+  * @retval None
+  */
+void assert_failed(uint8_t *file, uint32_t line)
+{
+  /* USER CODE BEGIN 6 */
+  /* User can add his own implementation to report the file name and line number,
+     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+  /* USER CODE END 6 */
+}
+#endif /* USE_FULL_ASSERT */
