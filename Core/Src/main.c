@@ -38,12 +38,15 @@
 // CAN constants
 #define SERVER_CAN_ID 				0x01
 #define SENSOR_NODE_CAN_ID   		0x30
-#define CAN_DATA_LEN    			8
+#define CAN_PACKET_LEN    			8
 #define START_MESSAGE_LEN 			1
 #define STOP_MESSAGE_LEN 			1
-// data states
+#define CAN_SEND_DELAY				250 // in milliseconds
+
+// sensor node data states
 #define SENSOR_NODE_RECEIVE_STATE	0
 #define SENSOR_NODE_TRANSMIT_STATE	1
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -52,10 +55,14 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-CAN_HandleTypeDef 			hcan;
+
 I2C_HandleTypeDef 			hi2c1;
+
+// CAN variables
+CAN_HandleTypeDef 			hcan;
 CAN_RxHeaderTypeDef   		rx_header;
-uint8_t               		rx_data[8];
+uint8_t               		rx_data[CAN_PACKET_LEN];
+uint8_t receive_state_packet[CAN_PACKET_LEN] = {0xaa,0xff,0xaa,0xff,0xaa,0xff,0xaa,0xff};
 volatile uint8_t 			sensor_node_state = SENSOR_NODE_RECEIVE_STATE;
 
 /* USER CODE BEGIN PV */
@@ -78,17 +85,22 @@ static void CAN_send_packet(	CAN_HandleTypeDef* hcan,
 								uint8_t* TxData,
 								uint8_t data_len	);
 
-// send start condition over CAN
+// send start packet over CAN
 static void CAN_send_start(CAN_HandleTypeDef* hcan, CAN_TxHeaderTypeDef* TxHeader);
 
-// send stop condition over CAN
+// send stop packet over CAN
 static void CAN_send_stop(CAN_HandleTypeDef* hcan, CAN_TxHeaderTypeDef* TxHeader);
 
-// send buffer of size buffer_len over CAN
+// send buffer of packets over CAN
 static void CAN_send_buffer(	CAN_HandleTypeDef* hcan,
 								CAN_TxHeaderTypeDef* TxHeader,
 								uint8_t* buffer,
 								uint8_t buffer_len	);
+
+static void CAN_send_receive_state(CAN_HandleTypeDef* hcan, CAN_TxHeaderTypeDef* TxHeader)
+{
+	CAN_send_packet(hcan, TxHeader, receive_state_packet, CAN_PACKET_LEN);
+}
 // --------------------------------------------------------------------------------------------------------
 
 typedef struct
@@ -168,14 +180,17 @@ int main(void)
   // set up test data
   // ############################################################################################################
   mpu6050_data mpu6050_test;
-  mpu6050_test.Ax = 32.5;
-  mpu6050_test.Ay = 506.8;
-  mpu6050_test.Az = 1002.76;
+  mpu6050_test.Ax = 10009.34;
+  mpu6050_test.Ay = 1222.555;
+  mpu6050_test.Az = 4002.76;
   size_t mpu6050_test_len = sizeof(mpu6050_test);
 
+
   bmp180_data bmp180_test;
-  bmp180_test.pressure = 5001;
-  bmp180_test.temperature = 42;
+  /*
+  bmp180_test.pressure = 6006;
+  bmp180_test.temperature = 98;
+  */
   size_t bmp180_test_len = sizeof(bmp180_test);
 
   size_t test_data_buffer_len = mpu6050_test_len + bmp180_test_len;
@@ -197,6 +212,8 @@ int main(void)
 	  // gather i2c sensor data and package for CAN
 	  //############################################################################################################
 	  // read sensor values
+	  bmp180_test.pressure = BMP180_GetPressure();
+	  bmp180_test.temperature = BMP180_GetTemperature();
 
 	  // package sensor values into data buffer
 	  memcpy(test_data_buffer, &bmp180_test, bmp180_test_len);
@@ -208,7 +225,12 @@ int main(void)
 	  {
 		  // send buffer over CAN
 		  CAN_send_buffer(&hcan, &TxHeader, test_data_buffer, test_data_buffer_len);
-		  HAL_Delay(100);
+		  HAL_Delay(CAN_SEND_DELAY);
+	  }
+	  else if( sensor_node_state == SENSOR_NODE_RECEIVE_STATE )
+	  {
+		  CAN_send_receive_state(&hcan, &TxHeader);
+		  HAL_Delay(CAN_SEND_DELAY);
 	  }
   }
   /* USER CODE END 3 */
@@ -435,9 +457,9 @@ static void CAN_send_buffer(	CAN_HandleTypeDef* hcan,
 	CAN_send_start(hcan, TxHeader);
 	//############################################################################################################
 	TxHeader->DLC = 8;
-	for(int mem_offset = 0; mem_offset < buffer_len; mem_offset += CAN_DATA_LEN)
+	for(int mem_offset = 0; mem_offset < buffer_len; mem_offset += CAN_PACKET_LEN)
 	{
-	  CAN_send_packet(hcan, TxHeader, buffer+mem_offset, CAN_DATA_LEN);
+	  CAN_send_packet(hcan, TxHeader, buffer+mem_offset, CAN_PACKET_LEN);
 	}
 
 	CAN_send_stop(hcan, TxHeader);
@@ -455,7 +477,6 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 	  {
 		  if( rx_data[0] == SENSOR_NODE_CAN_ID )
 		  {
-			  //HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
 			  sensor_node_state = SENSOR_NODE_TRANSMIT_STATE;
 		  }
 		  else

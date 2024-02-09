@@ -48,8 +48,8 @@ typedef struct BMP180_EEPROM {
 
 typedef struct bmp180_data
 {
-	uint32_t temperature;
-	uint32_t pressure;
+	float temperature;
+	int32_t pressure;
 }bmp180_data;
 
 extern I2C_HandleTypeDef *_bmp180_ui2c;
