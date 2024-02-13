@@ -143,6 +143,10 @@ int32_t BMP180_GetUP(void){
 	return ((BMP180_ReadReg(BMP180_MSB_REG) << 16) | (BMP180_ReadReg(BMP180_LSB_REG) << 8) | BMP180_ReadReg(BMP180_XLSB_REG)) >> (8 - _bmp180_oss);
 }
 
+uint8_t BMP180_check(void){
+	return BMP180_ReadReg(BMP180_CONTROL_REG);
+}
+
 #ifdef __cplusplus
 }
 #endif

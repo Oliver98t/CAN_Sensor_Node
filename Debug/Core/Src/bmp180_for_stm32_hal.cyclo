@@ -8,3 +8,4 @@
 ../Core/Src/bmp180_for_stm32_hal.c:106:9:BMP180_GetPressure	16
 ../Core/Src/bmp180_for_stm32_hal.c:138:9:BMP180_GetUT	1
 ../Core/Src/bmp180_for_stm32_hal.c:142:9:BMP180_GetUP	1
+../Core/Src/bmp180_for_stm32_hal.c:146:9:BMP180_check	1

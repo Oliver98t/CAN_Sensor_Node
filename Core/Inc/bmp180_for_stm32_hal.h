@@ -81,4 +81,5 @@ float BMP180_GetTemperature(void);
 int32_t BMP180_GetUT(void);
 int32_t BMP180_GetUP(void);
 
+uint8_t BMP180_check(void);
 #endif
