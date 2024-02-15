@@ -24,10 +24,10 @@
 #include "string.h"
 #include "stdlib.h"
 #include "stdio.h"
-#include "bmp180_for_stm32_hal.h"
 #include "mpu6050.h"
+#include "bmp180.h"
 //#include "DS3231.h"
-//#include "mpu6050.h"
+
 
 /* USER CODE END Includes */
 
@@ -47,6 +47,15 @@
 #define STOP_MESSAGE_LEN 			1
 #define CAN_SEND_DELAY				250 // in milliseconds
 
+// i2c connection states
+#define I2C_CONNECTED				1
+#define I2C_DISCONNECTED			2
+
+// config sensor buffer states
+#define SENSOR_BUF_CREATED			1
+#define SENSOR_BUF_NOT_CREATED		0
+
+
 // sensor node data states
 #define SENSOR_NODE_RECEIVE_STATE	0
 #define SENSOR_NODE_TRANSMIT_STATE	1
@@ -61,6 +70,7 @@
 
 /* Private variables ---------------------------------------------------------*/
 
+// i2c variables
 I2C_HandleTypeDef 			hi2c1;
 
 // CAN variables
@@ -102,22 +112,14 @@ static void CAN_send_buffer(	CAN_HandleTypeDef* hcan,
 								uint8_t* buffer,
 								uint8_t buffer_len	);
 
-static void CAN_send_receive_state(CAN_HandleTypeDef* hcan, CAN_TxHeaderTypeDef* TxHeader)
-{
-	CAN_send_packet(hcan, TxHeader, receive_state_packet, CAN_PACKET_LEN);
-}
+
+static void CAN_send_receive_state(CAN_HandleTypeDef* hcan, CAN_TxHeaderTypeDef* TxHeader);
+
+
+static uint8_t configure_sensors(uint8_t** sensor_config_buf, size_t* sensor_config_buf_len);
 // --------------------------------------------------------------------------------------------------------
 
-typedef struct
-{
-    int16_t accelX;
-    int16_t accelY;
-    int16_t accelZ;
-    int16_t gyroX;
-    int16_t gyroY;
-    int16_t gyroZ;
-    float temp;
-} mpu6050_data;
+
 
 /* USER CODE END PFP */
 
@@ -162,13 +164,13 @@ int main(void)
   //############################################################################################################
 
   // initialise i2c sensors
-  struct MPU6050 mpu6050;
-  MPU6050Init(&hi2c1, &mpu6050, 1, 1, 1, 1);
-
-  BMP180_Init(&hi2c1);
-  BMP180_SetOversampling(BMP180_ULTRA);
-  BMP180_UpdateCalibrationData();
-  bmp180_data bmp180_buf;
+  uint8_t* sensor_config_buf;
+  size_t sensor_config_buf_len = 0;
+  if(configure_sensors(&sensor_config_buf, &sensor_config_buf_len) != SENSOR_BUF_CREATED)
+  {
+	  // terminate if config sensor buffer cannot be created
+	  return 0;
+  }
 
   //############################################################################################################
 
@@ -190,21 +192,9 @@ int main(void)
 
   // set up test data
   // ############################################################################################################
-  mpu6050_data mpu6050_buf;
-  size_t mpu6050_buf_len = sizeof(mpu6050_buf);
-  uint8_t mpu6050_status;
 
 
-  /*
-  // test data
-  bmp180_buf.pressure = 6006;
-  bmp180_buf.temperature = 98;
-  */
 
-  size_t bmp180_buf_len = sizeof(bmp180_buf);
-  size_t data_buf_len = mpu6050_buf_len + bmp180_buf_len;
-  uint8_t bmp180_status;
-  uint8_t test_data_buffer[data_buf_len];
   // ############################################################################################################
 
 
@@ -219,47 +209,24 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
 
-	  // gather i2c sensor data and package for CAN
-	  //############################################################################################################
-	  // read sensor values
-	  MPU6050UpdateAccel();
-	  MPU6050UpdateGyro();
-	  MPU6050UpdateTemp();
-
-	  mpu6050_buf.accelX = mpu6050.accelX;
-	  mpu6050_buf.accelY = mpu6050.accelY;
-	  mpu6050_buf.accelZ = mpu6050.accelZ;
-	  mpu6050_buf.gyroX = mpu6050.gyroX;
-	  mpu6050_buf.gyroY = mpu6050.gyroY;
-	  mpu6050_buf.accelZ = mpu6050.accelZ;
-	  mpu6050_buf.temp = mpu6050.temp;
-
-	  bmp180_buf.pressure = BMP180_GetPressure();
-	  bmp180_buf.temperature = BMP180_GetTemperature();
-
-	  // package sensor values into data buffer
-	  memcpy(test_data_buffer, &bmp180_buf, bmp180_buf_len);
-	  memcpy(test_data_buffer+bmp180_buf_len, &mpu6050_buf, mpu6050_buf_len);
-	  //############################################################################################################
-
 	  // check sensor node state
-	  if( sensor_node_state == SENSOR_NODE_TRANSMIT_STATE )
+	  if( sensor_node_state == SENSOR_NODE_CONFIG_STATE )
 	  {
-		  // send buffer over CAN
-		  CAN_send_buffer(&hcan, &TxHeader, test_data_buffer, data_buf_len);
-		  HAL_Delay(CAN_SEND_DELAY);
+		 CAN_send_packet(&hcan, &TxHeader, sensor_config_buf, sensor_config_buf_len);
+		 HAL_Delay(CAN_SEND_DELAY);
 	  }
+
+	  else if( sensor_node_state == SENSOR_NODE_TRANSMIT_STATE )
+	  {
+
+	  }
+
 	  else if( sensor_node_state == SENSOR_NODE_RECEIVE_STATE )
 	  {
 		  CAN_send_receive_state(&hcan, &TxHeader);
 		  HAL_Delay(CAN_SEND_DELAY);
 	  }
-	  else if( sensor_node_state == SENSOR_NODE_CONFIG_STATE )
-	  {
-		  // check what sensors have been connected
-		  bmp180_status = BMP180_check();
-		  mpu6050_status = MPU6050_check();
-	  }
+
   }
   /* USER CODE END 3 */
 }
@@ -481,16 +448,84 @@ static void CAN_send_buffer(	CAN_HandleTypeDef* hcan,
 								uint8_t* buffer,
 								uint8_t buffer_len)
 {
+	if( buffer_len < CAN_PACKET_LEN )
+	{
+		TxHeader->DLC = buffer_len;
+	}
+	else
+	{
+		TxHeader->DLC = CAN_PACKET_LEN;
+	}
+
 	// iterate through bytes of data and send over CAN
 	CAN_send_start(hcan, TxHeader);
-	//############################################################################################################
-	TxHeader->DLC = 8;
+
 	for(int mem_offset = 0; mem_offset < buffer_len; mem_offset += CAN_PACKET_LEN)
 	{
-	  CAN_send_packet(hcan, TxHeader, buffer+mem_offset, CAN_PACKET_LEN);
+	  CAN_send_packet(hcan, TxHeader, buffer+mem_offset, TxHeader->DLC);
 	}
 
 	CAN_send_stop(hcan, TxHeader);
+}
+
+static void CAN_send_receive_state(CAN_HandleTypeDef* hcan, CAN_TxHeaderTypeDef* TxHeader)
+{
+	CAN_send_packet(hcan, TxHeader, receive_state_packet, CAN_PACKET_LEN);
+}
+
+
+static uint8_t configure_sensors(uint8_t** sensor_config_buf, size_t* sensor_config_buf_len)
+{
+	// setup sensor config buffer
+	size_t i_sensor_config_buf_len = 0;
+	uint8_t* i_sensor_config_buf = (uint8_t*)calloc(i_sensor_config_buf_len, 0);
+
+	// combined sensor data buffer
+	size_t sensor_data_buf_len = 0;
+
+	// initialise i2c sensors
+	struct MPU6050 mpu6050;
+	MPU6050Init(&hi2c1, &mpu6050, 1, 1, 1, 1);
+	uint8_t mpu6050_state =  MPU6050_connection_state();
+
+	if( mpu6050_state == MPU6050_NET_CODE )
+	{
+		i_sensor_config_buf_len++;
+		i_sensor_config_buf = realloc( i_sensor_config_buf, i_sensor_config_buf_len * sizeof(uint8_t) );
+		i_sensor_config_buf[i_sensor_config_buf_len-1] = MPU6050_NET_CODE;
+		sensor_data_buf_len += sizeof(mpu6050_data);
+
+	}
+
+	BMP180_Init(&hi2c1);
+	BMP180_SetOversampling(BMP180_ULTRA);
+	BMP180_UpdateCalibrationData();
+	uint8_t bmp180_state = BMP180_connection_state();
+
+	if( bmp180_state == BMP180_NET_CODE )
+	{
+		i_sensor_config_buf_len++;
+		i_sensor_config_buf = realloc( i_sensor_config_buf, i_sensor_config_buf_len * sizeof(uint8_t) );
+		i_sensor_config_buf[i_sensor_config_buf_len-1] = BMP180_NET_CODE;
+		sensor_data_buf_len += sizeof(bmp180_data);
+
+	}
+
+	if( i_sensor_config_buf_len < 1 )
+	{
+		free(i_sensor_config_buf);
+		*sensor_config_buf_len = i_sensor_config_buf_len;
+		return SENSOR_BUF_NOT_CREATED;
+	}
+	else
+	{
+		*sensor_config_buf = (uint8_t*)calloc(i_sensor_config_buf_len, 0);
+		*sensor_config_buf_len = i_sensor_config_buf_len;
+		memcpy(*sensor_config_buf, i_sensor_config_buf, i_sensor_config_buf_len * sizeof(uint8_t));
+		free(i_sensor_config_buf);
+		return SENSOR_BUF_CREATED;
+	}
+
 }
 
 //-------------------------------------------------------------------------------------------------------------------------

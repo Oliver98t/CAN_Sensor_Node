@@ -81,11 +81,22 @@ void MPU6050Check(void){
 	MPU6050BufferReset();
 }
 
-uint8_t MPU6050_check(void){
-	mpu->buff[0] = MPU6050_CONFIG;
+uint8_t MPU6050_connection_state(void)
+{
+	mpu->buff[0] = MPU6050_WHO_AM_I;
 	HAL_I2C_Master_Transmit(mpui2c, mpu->address, mpu->buff, 1, 100);
 	HAL_I2C_Master_Receive(mpui2c, mpu->address, mpu->buff, 1, 100);
 	mpu->check = mpu->buff[0];
 	MPU6050BufferReset();
-	return mpu->check;
+	if( mpu->check == 0x68 )
+	{
+		return MPU6050_NET_CODE;
+	}
+	else
+	{
+		return MPU6050_DISCONNECTED;
+	}
+
 }
+
+

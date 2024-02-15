@@ -7,4 +7,4 @@
 ../Core/Src/mpu6050.c:64:6:MPU6050ReadRegister	32	static
 ../Core/Src/mpu6050.c:70:6:MPU6050BufferReset	16	static
 ../Core/Src/mpu6050.c:76:6:MPU6050Check	16	static
-../Core/Src/mpu6050.c:84:9:MPU6050_check	16	static
+../Core/Src/mpu6050.c:84:9:MPU6050_connection_state	16	static
