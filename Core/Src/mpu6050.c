@@ -1,4 +1,6 @@
 #include "MPU6050.h"
+#include "stdlib.h"
+#include "string.h"
 
 I2C_HandleTypeDef *mpui2c;
 struct MPU6050 *mpu;
@@ -99,4 +101,20 @@ uint8_t MPU6050_connection_state(void)
 
 }
 
+void MPU6050_get_buf(uint8_t** mpu6050_buf, size_t* mpu6050_buf_len)
+{
+	mpu6050_data data;
+	data.accelX = 10;
+	data.accelY = 20;
+	data.accelZ = 30;
+	data.gyroX = 40;
+	data.gyroY = 50;
+	data.gyroZ = 60;
+	data.temp = 70.77;
+
+	*mpu6050_buf_len = sizeof(data);
+
+	*mpu6050_buf = (uint8_t*)calloc(*mpu6050_buf_len, sizeof(uint8_t));
+	memcpy(*mpu6050_buf, &data, *mpu6050_buf_len);
+}
 

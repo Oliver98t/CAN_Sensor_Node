@@ -64,5 +64,5 @@ void MPU6050ReadRegister(uint8_t address, uint16_t size);
 void MPU6050BufferReset(void);
 void MPU6050Check(void);
 uint8_t MPU6050_connection_state(void);
-
+void MPU6050_get_buf(uint8_t** mpu6050_buf, size_t* mpu6050_buf_len);
 #endif
