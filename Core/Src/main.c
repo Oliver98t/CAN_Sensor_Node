@@ -24,9 +24,9 @@
 #include "string.h"
 #include "stdlib.h"
 #include "stdio.h"
-#include "mpu6050.h"
 #include "bmp180.h"
-//#include "DS3231.h"
+#include "mpu6050.h"
+#include "DS3231.h"
 
 
 /* USER CODE END Includes */
@@ -78,7 +78,9 @@
 /* Private variables ---------------------------------------------------------*/
 
 // i2c variables
-I2C_HandleTypeDef 			hi2c1;
+I2C_HandleTypeDef hi2c1;
+struct MPU6050 mpuP;
+_RTC rtc;
 
 // CAN variables
 CAN_HandleTypeDef 			hcan;
@@ -125,11 +127,7 @@ static void CAN_send_buffer(	CAN_HandleTypeDef* hcan,
 static void CAN_send_wait_state_ack(CAN_HandleTypeDef* hcan, CAN_TxHeaderTypeDef* TxHeader);
 
 // send error packet
-static void CAN_send_error(CAN_HandleTypeDef* hcan, CAN_TxHeaderTypeDef* TxHeader)
-{
-	uint8_t TxData = 0xcc;
-	CAN_send_packet(hcan, TxHeader, &TxData, STOP_MESSAGE_LEN);
-}
+static void CAN_send_error(CAN_HandleTypeDef* hcan, CAN_TxHeaderTypeDef* TxHeader);
 
 // --------------------------------------------------------------------------------------------------------
 
@@ -143,46 +141,14 @@ static uint8_t configure_sensors(uint8_t** sensor_config_buf, size_t* sensor_con
 #define NO_SENSOR 0x00
 
 // create sensor buffer segment for specific sensor
-static uint8_t create_sensor_buf_segment(uint8_t sensor_code, uint8_t** sensor_buf_segment, size_t* sensor_buf_segment_len)
-{
-	switch( sensor_code )
-	{
-		case BMP180_NET_CODE:
-			BMP180_get_buf(sensor_buf_segment, sensor_buf_segment_len);
-			return 0xfb;
-		case MPU6050_NET_CODE:
-			MPU6050_get_buf(sensor_buf_segment, sensor_buf_segment_len);
-			return 0xbf;
-		default:
-			return NO_SENSOR;
-	}
-}
+static uint8_t create_sensor_buf_segment(uint8_t sensor_code, uint8_t* sensor_buf, size_t* sensor_buf_offset);
 
 
 // read from connected sensors and create buffer for current timestep values
 static void create_sensor_buffer(	uint8_t** sensor_config_buf,
 									size_t* sensor_config_buf_len,
-									uint8_t** sensor_buf,
-									size_t* sensor_buf_len	)
-{
-	uint8_t* sensor_buf_segment;
-	size_t sensor_buf_segment_len = 0;
-
-	size_t sensor_buf_offset = 0;
-
-	for( int i = 0; i < *sensor_config_buf_len; i++ )
-	{
-
-		create_sensor_buf_segment(*sensor_config_buf[i], &sensor_buf_segment, &sensor_buf_segment_len);
-
-		memcpy(*sensor_buf+sensor_buf_offset, sensor_buf_segment, sensor_buf_segment_len);
-		sensor_buf_offset = sensor_buf_segment_len;
-		free(sensor_buf_segment);
-
-	}
-
-	return;
-}
+									uint8_t* sensor_buf,
+									size_t* sensor_buf_len	);
 
 // --------------------------------------------------------------------------------------------------------
 
@@ -245,7 +211,7 @@ int main(void)
   }
 
   // create array to store sensor data from all sensors
-  uint8_t* sensor_data_buf = (uint8_t*)calloc(sensor_data_buf_len, sizeof(uint8_t));
+  uint8_t sensor_data_buf[sensor_data_buf_len];
 
   //############################################################################################################
 
@@ -264,13 +230,6 @@ int main(void)
   TxHeader.DLC = 8;
   TxHeader.TransmitGlobalTime = DISABLE;
   //############################################################################################################
-
-  // set up test data
-  // ############################################################################################################
-
-
-
-  // ############################################################################################################
 
 
 
@@ -297,8 +256,7 @@ int main(void)
 	  }
 	  else if( sensor_node_state == SENSOR_NODE_TRANSMIT_STATE )
 	  {
-		  create_sensor_buffer(&sensor_config_buf, &sensor_config_buf_len, &sensor_data_buf, &sensor_data_buf_len);
-
+		  create_sensor_buffer(&sensor_config_buf, &sensor_config_buf_len, &sensor_data_buf[0], &sensor_data_buf_len);
 		  CAN_send_buffer(&hcan, &TxHeader, sensor_data_buf, sensor_data_buf_len);
 		  HAL_Delay(CAN_SEND_DELAY);
 	  }
@@ -555,42 +513,72 @@ static void CAN_send_wait_state_ack(CAN_HandleTypeDef* hcan, CAN_TxHeaderTypeDef
 	CAN_send_packet(hcan, TxHeader, wait_state_ack_packet, CAN_PACKET_LEN);
 }
 
+// send error packet
+static void CAN_send_error(CAN_HandleTypeDef* hcan, CAN_TxHeaderTypeDef* TxHeader)
+{
+	uint8_t TxData = 0xcc;
+	CAN_send_packet(hcan, TxHeader, &TxData, STOP_MESSAGE_LEN);
+}
+
 static uint8_t configure_sensors(uint8_t** sensor_config_buf, size_t* sensor_config_buf_len, size_t* sensor_buf_len)
 {
 	// setup sensor configuration buffer
 	size_t i_sensor_config_buf_len = 0;
 	uint8_t* i_sensor_config_buf = (uint8_t*)calloc(i_sensor_config_buf_len, 0);
 
-	// combined sensor data buffer
+	// combined sensor data buffer length
 	size_t i_sensor_buf_len = 0;
+	HAL_StatusTypeDef ret;
 
 	// initialise i2c sensors
-	struct MPU6050 mpu6050;
-	MPU6050Init(&hi2c1, &mpu6050, 1, 1, 1, 1);
-	uint8_t mpu6050_state =  MPU6050_connection_state();
 
-	if( mpu6050_state == MPU6050_NET_CODE )
+	// attempt to initialise ds3231
+	//---------------------------------------------------------------------------------------------------------
+	ret = HAL_I2C_IsDeviceReady(&hi2c1, (uint16_t)DS3231_ADDR, 3, 5);
+	if( ret == HAL_OK )
 	{
+		DS3231_Init(&hi2c1);
 		i_sensor_config_buf_len++;
 		i_sensor_config_buf = realloc( i_sensor_config_buf, i_sensor_config_buf_len * sizeof(uint8_t) );
-		i_sensor_config_buf[i_sensor_config_buf_len-1] = MPU6050_NET_CODE;
-		i_sensor_buf_len += sizeof(mpu6050_data);
-
+		i_sensor_config_buf[i_sensor_config_buf_len-1] = DS3231_NET_CODE;
+		i_sensor_buf_len += sizeof(float);
 	}
+	//---------------------------------------------------------------------------------------------------------
 
-	BMP180_Init(&hi2c1);
-	BMP180_SetOversampling(BMP180_ULTRA);
-	BMP180_UpdateCalibrationData();
-	uint8_t bmp180_state = BMP180_connection_state();
+	//---------------------------------------------------------------------------------------------------------
+	// attempt to initialise bmp180
 
-	if( bmp180_state == BMP180_NET_CODE )
+	ret = HAL_I2C_IsDeviceReady(&hi2c1, (uint16_t)(BMP180_I2C_ADDR<<1), 3, 5);
+
+	if( ret == HAL_OK )
 	{
+		BMP180_Init(&hi2c1);
+		BMP180_SetOversampling(BMP180_ULTRA);
+		BMP180_UpdateCalibrationData();
 		i_sensor_config_buf_len++;
 		i_sensor_config_buf = realloc( i_sensor_config_buf, i_sensor_config_buf_len * sizeof(uint8_t) );
 		i_sensor_config_buf[i_sensor_config_buf_len-1] = BMP180_NET_CODE;
 		i_sensor_buf_len += sizeof(bmp180_data);
 
 	}
+	//---------------------------------------------------------------------------------------------------------
+
+	//---------------------------------------------------------------------------------------------------------
+	// Attempt to initialise mpu6050
+
+	ret = HAL_I2C_IsDeviceReady(&hi2c1, (uint16_t)MPU6050_ADDRESS, 3, 5);
+
+	if( ret == HAL_OK )
+	{
+		MPU6050Init(&hi2c1, &mpuP, 1, 1, 1, 1);
+		i_sensor_config_buf_len++;
+		i_sensor_config_buf = realloc( i_sensor_config_buf, i_sensor_config_buf_len * sizeof(uint8_t) );
+		i_sensor_config_buf[i_sensor_config_buf_len-1] = MPU6050_NET_CODE;
+		i_sensor_buf_len += sizeof(mpu6050_data);
+
+	}
+	//---------------------------------------------------------------------------------------------------------
+
 
 	if( i_sensor_config_buf_len < 1 )
 	{
@@ -611,6 +599,42 @@ static uint8_t configure_sensors(uint8_t** sensor_config_buf, size_t* sensor_con
 
 }
 
+// create sensor buffer segment for specific sensor
+static uint8_t create_sensor_buf_segment(uint8_t sensor_code, uint8_t* sensor_buf, size_t* sensor_buf_offset)
+{
+	switch( sensor_code )
+	{
+		case MPU6050_NET_CODE:
+			MPU6050_get_buf(sensor_buf, sensor_buf_offset);
+			return 1;
+		case BMP180_NET_CODE:
+			BMP180_get_buf(sensor_buf, sensor_buf_offset);
+			return 1;
+		case DS3231_NET_CODE:
+			DS3231_get_buf(sensor_buf, sensor_buf_offset);
+			return 1;
+		default:
+			return NO_SENSOR;
+	}
+}
+
+// read from connected sensors and create buffer for current timestep values
+static void create_sensor_buffer(	uint8_t** sensor_config_buf,
+									size_t* sensor_config_buf_len,
+									uint8_t* sensor_buf,
+									size_t* sensor_buf_len	)
+{
+	size_t sensor_buf_offset = 0;
+
+	for( int i = 0; i < *sensor_config_buf_len; i++ )
+	{
+		uint8_t sensor_code = (*sensor_config_buf)[i];
+		create_sensor_buf_segment(sensor_code, sensor_buf, &sensor_buf_offset);
+	}
+
+	return;
+}
+
 //-------------------------------------------------------------------------------------------------------------------------
 
 
@@ -623,6 +647,7 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 	 if( rx_data[0] == SENSOR_NODE_CAN_ID )
 	 {
 		 sensor_node_state = SENSOR_NODE_TRANSMIT_STATE;
+		 HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_SET);
 	 }
 	 else if( rx_data[0] == SENSOR_NODE_RESET_COMMAND )
 	 {
@@ -631,8 +656,8 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 	 else
 	 {
 		 sensor_node_state = SENSOR_NODE_WAIT_STATE;
+		 HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
 	 }
-
   }
 }
 

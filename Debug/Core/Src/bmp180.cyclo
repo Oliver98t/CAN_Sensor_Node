@@ -1,0 +1,12 @@
+../Core/Src/bmp180.c:29:6:BMP180_Init	1
+../Core/Src/bmp180.c:38:6:BMP180_SetOversampling	1
+../Core/Src/bmp180.c:46:6:BMP180_UpdateCalibrationData	1
+../Core/Src/bmp180.c:65:6:BMP180_WriteReg	1
+../Core/Src/bmp180.c:75:9:BMP180_ReadReg	1
+../Core/Src/bmp180.c:86:9:BMP180_GetRawTemperature	3
+../Core/Src/bmp180.c:100:7:BMP180_GetTemperature	1
+../Core/Src/bmp180.c:109:9:BMP180_GetPressure	16
+../Core/Src/bmp180.c:143:6:BMP180_get_buf	1
+../Core/Src/bmp180.c:155:9:BMP180_GetUT	1
+../Core/Src/bmp180.c:159:9:BMP180_GetUP	1
+../Core/Src/bmp180.c:163:9:BMP180_connection_state	2

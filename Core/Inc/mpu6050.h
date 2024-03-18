@@ -10,7 +10,7 @@
 #define	MPU6050_DISCONNECTED	0
 
 // i2c register mapping
-#define MPU6050_ADDRESS 		0x68 << 1
+#define MPU6050_ADDRESS 		0x69 << 1
 #define MPU6050_CONFIG 			0x1A
 #define MPU6050_GYRO_CONFIG 	0x1B
 #define MPU6050_ACCEL_CONFIG 	0x1C
@@ -54,7 +54,7 @@ typedef struct mpu6050_data{
     float temp;
 }mpu6050_data;
 
-uint32_t MPU6050Init(I2C_HandleTypeDef *i2c, struct MPU6050 *mpu, uint8_t dlpf_cfg, uint8_t fs_sel, uint8_t afs_sel, uint8_t clk_sel);
+uint32_t MPU6050Init(I2C_HandleTypeDef *i2c, struct MPU6050 *mpuP, uint8_t dlpf_cfg, uint8_t fs_sel, uint8_t afs_sel, uint8_t clk_sel);
 void MPU6050Start(void);
 void MPU6050UpdateAccel(void);
 void MPU6050UpdateTemp(void);
@@ -64,5 +64,5 @@ void MPU6050ReadRegister(uint8_t address, uint16_t size);
 void MPU6050BufferReset(void);
 void MPU6050Check(void);
 uint8_t MPU6050_connection_state(void);
-void MPU6050_get_buf(uint8_t** mpu6050_buf, size_t* mpu6050_buf_len);
+void MPU6050_get_buf(uint8_t* sensor_buf, size_t* sensor_buf_offset);
 #endif

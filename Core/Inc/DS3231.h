@@ -1,16 +1,12 @@
-/*
- * stm32_ds3231.h
- *
- *  Created on: 2019. 3. 17.
- *      Author: Jihoon Lee
- */
+
 
 #ifndef STM32_DS3231_H_
 #define STM32_DS3231_H_
 
 #include <stdlib.h>
 #include <stdbool.h>
-
+#define DS3231_ADDR  (0x68 << 1)
+#define DS3231_NET_CODE			0x03
 #define DS3231_REG_TIME         0x00
 #define DS3231_REG_ALARM1       0x07
 #define DS3231_REG_ALARM2       0x0B
@@ -72,5 +68,5 @@ bool DS3231_SetAlarm1(AlarmMode mode, uint8_t date, uint8_t hour, uint8_t min, u
 bool DS3231_ClearAlarm1();
 bool ReadRegister(uint8_t regAddr, uint8_t *value);
 bool WriteRegister(uint8_t regAddr, uint8_t value);
-
+void DS3231_get_buf(uint8_t* sensor_buf, size_t* sensor_buf_offset);
 #endif /* STM32_DS3231_H_ */

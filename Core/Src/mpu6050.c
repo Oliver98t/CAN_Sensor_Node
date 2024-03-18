@@ -1,6 +1,6 @@
-#include "MPU6050.h"
-#include "stdlib.h"
+#include "mpu6050.h"
 #include "string.h"
+#include "stdlib.h"
 
 I2C_HandleTypeDef *mpui2c;
 struct MPU6050 *mpu;
@@ -83,13 +83,14 @@ void MPU6050Check(void){
 	MPU6050BufferReset();
 }
 
+
 uint8_t MPU6050_connection_state(void)
 {
 	mpu->buff[0] = MPU6050_WHO_AM_I;
 	HAL_I2C_Master_Transmit(mpui2c, mpu->address, mpu->buff, 1, 100);
 	HAL_I2C_Master_Receive(mpui2c, mpu->address, mpu->buff, 1, 100);
 	mpu->check = mpu->buff[0];
-	MPU6050BufferReset();
+
 	if( mpu->check == 0x68 )
 	{
 		return MPU6050_NET_CODE;
@@ -101,20 +102,38 @@ uint8_t MPU6050_connection_state(void)
 
 }
 
-void MPU6050_get_buf(uint8_t** mpu6050_buf, size_t* mpu6050_buf_len)
+void MPU6050_get_buf(uint8_t* sensor_buf, size_t* sensor_buf_offset)
 {
 	mpu6050_data data;
+	// read sensor values
+	MPU6050UpdateAccel();
+	MPU6050UpdateGyro();
+	MPU6050UpdateTemp();
+
+	/*
+	// test data
 	data.accelX = 10;
 	data.accelY = 20;
 	data.accelZ = 30;
 	data.gyroX = 40;
 	data.gyroY = 50;
 	data.gyroZ = 60;
-	data.temp = 70.77;
+	data.temp = 10.1;
+	*/
 
-	*mpu6050_buf_len = sizeof(data);
+	data.accelX = mpu->accelX;
+	data.accelY = mpu->accelY;
+	data.accelZ = mpu->accelZ;
+	data.gyroX = mpu->gyroX;
+	data.gyroY = mpu->gyroY;
+	data.gyroZ = mpu->gyroZ;
+	data.temp = mpu->temp;
 
-	*mpu6050_buf = (uint8_t*)calloc(*mpu6050_buf_len, sizeof(uint8_t));
-	memcpy(*mpu6050_buf, &data, *mpu6050_buf_len);
+
+	size_t data_len = sizeof(data);
+
+
+	memcpy(sensor_buf+*sensor_buf_offset, &data, data_len);
+	*sensor_buf_offset += data_len;
 }
 

@@ -1,21 +1,9 @@
-/*
- * DS3231.c
- *
- *  Created on: Feb 9, 2024
- *      Author: oli19
- */
 
-
-/*
- * stm32_ds3231.c
- *
- *  Created on: 2019. 3. 17.
- *      Author: kiki
- */
 #include "stm32f0xx_hal.h"
 #include "DS3231.h"
-
-#define DS3231_ADDR  (0x68 << 1)
+#include "string.h"
+#include "stdlib.h"
+//#define DS3231_ADDR  (0x68 << 1)
 
 I2C_HandleTypeDef *i2c;
 
@@ -160,4 +148,16 @@ static uint8_t B2D(uint8_t bcd)
 static uint8_t D2B(uint8_t decimal)
 {
   return (((decimal / 10) << 4) | (decimal % 10));
+}
+
+void DS3231_get_buf(uint8_t* sensor_buf, size_t* sensor_buf_offset)
+{
+	float data;
+	DS3231_ReadTemperature(&data);
+
+	size_t data_len = sizeof(data);
+
+
+	memcpy(sensor_buf+*sensor_buf_offset, &data, data_len);
+	*sensor_buf_offset += data_len+4;
 }
